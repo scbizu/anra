@@ -124,7 +124,8 @@ provider/model identity for provenance without duplicating private payloads.
 All methods use generated protobuf/Connect bindings over HTTP and require an
 authenticated requester. The canonical contract is
 `proto/anra/a2a/tape/v1/tape.proto`; the handwritten extension JSON-RPC transport
-has been removed.
+has been removed. A generic JSON-RPC binding derived from the same proto is
+proposed in the [JSON-RPC proxy design](a2a-tape-view-jsonrpc-proxy-design.md).
 
 | Method | Input | Result |
 | --- | --- | --- |
