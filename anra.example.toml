@@ -1,0 +1,15 @@
+default-agent = "alice"
+
+[defaults]
+data-dir = ".anra"
+session = "default"
+provider = "deepseek"
+timeout = "1m"
+registry = "http://127.0.0.1:9090"
+listen = "127.0.0.1:0"
+
+[agents.alice]
+
+[agents.bob]
+# Set DEEPSEEK_API_KEY in each server environment.
+# Keep the registry and agent endpoints inside the trusted team network.

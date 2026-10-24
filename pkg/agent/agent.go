@@ -26,8 +26,7 @@ func New(principal string, tape *bbolt.Bbolt, opts ...Option) (*Anra, error) {
 		principal: principal,
 		tape:      tape,
 		runtime: runtimeConfig{
-			maxTurns:   defaultMaxTurns,
-			toolByName: make(map[string]Tool),
+			maxTurns: defaultMaxTurns,
 		},
 	}
 	for _, opt := range opts {
@@ -37,6 +36,9 @@ func New(principal string, tape *bbolt.Bbolt, opts ...Option) (*Anra, error) {
 		if err := opt(anra); err != nil {
 			return nil, err
 		}
+	}
+	if err := anra.initialize(); err != nil {
+		return nil, err
 	}
 	return anra, nil
 }

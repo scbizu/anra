@@ -37,7 +37,7 @@ Feature: Trusted peers communicate and borrow permissioned context
     And the borrower changes the query but keeps the request ID
     Then the request fails with a conflict
 
-  Scenario: Another authenticated peer cannot use the borrower's grant
+  Scenario: Another identified peer cannot use the borrower's grant
     When the borrower requests context
     Then another peer cannot look up, read, or release that grant
     And another peer's own request is denied without context
@@ -77,7 +77,7 @@ Feature: Trusted peers communicate and borrow permissioned context
 
     Examples:
       | problem           | code                |
-      | no credentials    | unauthenticated     |
+      | no identity       | unauthenticated     |
       | no extension      | failed_precondition |
       | missing purpose   | invalid_argument    |
       | reversed bounds   | invalid_argument    |

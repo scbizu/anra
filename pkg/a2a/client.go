@@ -79,7 +79,7 @@ func RankPeers(ctx context.Context, ranker Ranker, query string, peers []Peer) (
 	return ranked, nil
 }
 
-// BorrowTool implements agent.Tool. Anra persists its structured result as a
+// BorrowTool exposes context borrowing. Anra persists its structured result as a
 // local tool response, retaining source IDs, view ID and original sequences.
 // Borrowed text never becomes a local assistant/tool execution record.
 type BorrowTool struct {

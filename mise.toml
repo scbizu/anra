@@ -34,6 +34,10 @@ diff -ru gen "$generated_dir/gen"
 [tasks.build]
 run = "go build ./..."
 
+[tasks.build-cli]
+description = "Build the Anra command line binary"
+run = "go build -o anra ./cmd/anra"
+
 [tasks.e2e]
 description = "Run the executable Given/When/Then acceptance scenarios"
 run = "go test -count=1 -v ./tests/e2e"

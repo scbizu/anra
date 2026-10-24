@@ -51,7 +51,7 @@ views, err := a2a.NewService(a2a.Config{
 executor, err := a2a.NewExecutor(researcherAnra)
 core := a2asrv.NewHandler(executor)
 err = a2a.Advertise(card, publicBaseURL + a2a.ViewPath)
-handler, err := a2a.NewPeerHandler(card, core, views, authenticatePeer)
+handler, err := a2a.NewPeerHandler(card, core, views, a2a.TrustedPeerIdentity)
 ```
 
 The caller supplies a native SDK Agent Card with its name, skills, input/output
@@ -61,14 +61,20 @@ modes, security schemes/requirements, and a JSONRPC interface at
 | Path | Behavior |
 | --- | --- |
 | `/.well-known/agent-card.json` | Public native SDK Agent Card |
-| `/a2a` | Authenticated core A2A JSON-RPC, including SDK streaming |
-| `/anra.a2a.tape.v1.TapeViewService/` | Authenticated protobuf/Connect extension RPCs |
+| `/a2a` | Caller-identified core A2A JSON-RPC, including SDK streaming |
+| `/anra.a2a.tape.v1.TapeViewService/` | Caller-identified protobuf/Connect extension RPCs |
 
-`authenticatePeer` verifies credentials (for example, bearer tokens or mTLS)
-and returns a stable requester identity. Authentication is also propagated into
-SDK `CallContext.User`. The public card must describe the chosen authentication
-scheme. Authentication establishes identity; `Policy` separately decides who
-may borrow which context.
+The CLI and trusted-team profile use `a2a.TrustedPeerIdentity` to resolve
+`Anra-Agent` into a stable requester identity, also propagated into SDK
+`CallContext.User`. Use `a2a.TrustedHTTPClient(agentName)` on the client side.
+Both registry and peer endpoints must be accessible only to trusted members;
+this header is an assertion, not proof of membership, and receivers do not
+perform a live membership lookup. No global shared token is required.
+
+`Policy` independently decides who may borrow which context. Every grant and
+subsequent read remains bound to the requester identity. For deployments that
+need credential verification, the handler callback can instead verify credentials
+and return a stable identity; the card must advertise that deployment's scheme.
 
 `Eligible` returns only permitted, exportable candidate anchor summaries and
 source ranges inside the request's `Bounds`. `Ranker` receives those summaries and the query and returns the indexes worth
@@ -83,25 +89,25 @@ policy remains in Anra.
 
 Discover configured, trusted peer card URLs. An optional directory can provide
 these same references. `RankPeers` ranks visible native card skill descriptions
-and returns the peers worth visiting, best first, or no match. This release does not implement a network
-registry or automatic registration.
+and returns the peers worth visiting, best first, or no match. The CLI's
+`registry` command provides a leased team directory of Agent Cards.
+`serve --registry <url>` registers automatically, and named sends resolve the
+current destination card through that directory. See
+[CLI discovery](cli.md#running-servers-and-discovery). The registry is an Anra
+directory service; core A2A communication still uses the official SDK.
 
 ```go
-card, err := a2a.Discover(ctx, credentialScopedHTTPClient, peerCardURL)
-client, err := a2a.NewClient(credentialScopedHTTPClient, card)
+peerHTTPClient := a2a.TrustedHTTPClient("borrower")
+card, err := a2a.Discover(ctx, peerHTTPClient, peerCardURL)
+client, err := a2a.NewClient(peerHTTPClient, card)
 borrower, err := agent.New("borrower-local", borrowerTape,
-    agent.WithRunner(modelRunner),
-    agent.WithTool(a2a.BorrowTool{
-        Client: client,
-        Name: "borrow_researcher_context",
-        Description: "Borrow relevant storage research from the researcher peer",
-    }),
+    agent.WithLLM(providerModel),
+    agent.WithBorrowClient(client),
 )
 output, err := borrower.Run(ctx, "Find the peer's storage concurrency findings")
 ```
 
-The HTTP client supplies credential handling, timeouts and endpoint trust;
-validate card endpoints and redirects before forwarding credentials. The tool
+The HTTP client supplies caller identity, timeouts and endpoint trust. The tool
 accepts `requestId`, `purpose`, and `query`. It returns the decision and, for a
 grant, all pages checked against its source, snapshot and sequence range. Anra persists the result as a local tool response,
 with `agentId`, `tapeId`, `viewId`, source sequences and snapshot head intact.
@@ -128,6 +134,10 @@ custom task stores can be supplied directly to `NewPeerHandler` through SDK
 interfaces. The historical tape-backed task persistence profile is not restored
 by this release. Core message IDs are not a durable runtime deduplication key;
 the extension's request IDs are.
+
+For a messaging-only server, `NewMessageHandler(card, core, a2a.TrustedPeerIdentity)`
+serves the same discovery and caller-identified A2A endpoints without a borrowing
+service or grant journal. This is the handler used by [`anra serve`](cli.md).
 
 ## Wire contract and limits
 
@@ -205,7 +215,7 @@ granted range with the exporter configured at the time.
 | `not_found` | View unavailable (unknown, wrong requester, released or expired) |
 | `internal` | Storage failure or masked internal/provider failure |
 | `unimplemented` | Unknown RPC or unsupported entry representation |
-| `unauthenticated` | Peer authentication failed |
+| `unauthenticated` | Caller identity is missing or rejected |
 | `resource_exhausted` | Oversized RPC message |
 
 Errors never include another requester's grant details. `Get` and repeated
@@ -265,9 +275,9 @@ content fingerprint checks, so a changed source tape with the same configured
 identity is not detected; a missing entry in the granted range still fails the
 read. Already delivered context cannot be recalled by closing a grant.
 
-Run `go test ./pkg/a2a` for the executable two-peer workflow, official SDK core
+Run `mise run e2e` for the executable peer and CLI workflows, official SDK core
 and streaming compatibility, model consumption/replay, bbolt restart,
-idempotency, authentication, bounds, corruption and failure checks.
+idempotency, requester identity and grants, and invalid wire request checks.
 
 References: [A2A extensions](https://a2a-protocol.org/latest/topics/extensions/),
 [A2A discovery](https://a2a-protocol.org/latest/topics/agent-discovery/),

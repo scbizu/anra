@@ -39,6 +39,7 @@ type scenario struct {
 	localTape, peerTape *bbolt.Bbolt
 	service             *a2a.Service
 	server              *httptest.Server
+	modelServer         *httptest.Server
 	card                *sdk.AgentCard
 	client              *a2a.Client
 	ordinary            *a2aclient.Client
@@ -56,18 +57,23 @@ type scenario struct {
 
 func initializeScenario(sc *godog.ScenarioContext) {
 	s := &scenario{}
+	initializeCLI(sc, s)
 	sc.Before(func(ctx context.Context, _ *godog.Scenario) (context.Context, error) {
 		root, err := os.MkdirTemp("", "anra-e2e-")
 		if err != nil {
 			return ctx, err
 		}
 		*s = scenario{root: root}
+		s.modelServer = newModelServer()
 		s.ctx, s.cancel = context.WithTimeout(ctx, 20*time.Second)
 		s.clock.Store(time.Date(2026, 10, 20, 0, 0, 0, 0, time.UTC).UnixNano())
 		return s.ctx, nil
 	})
 	sc.After(func(ctx context.Context, sc *godog.Scenario, scenarioErr error) (context.Context, error) {
 		err := s.stopPeer()
+		if s.modelServer != nil {
+			s.modelServer.Close()
+		}
 		if s.localTape != nil {
 			err = errors.Join(err, s.localTape.Close())
 		}
@@ -151,10 +157,6 @@ func (s *scenario) saveFailure(name string, failure error) error {
 
 type modelFunc func(context.Context, runner.Request) (runner.Response, error)
 
-func (f modelFunc) RunTurn(ctx context.Context, r runner.Request) (runner.Response, error) {
-	return f(ctx, r)
-}
-
 func (s *scenario) openTape(name, principal string) (*bbolt.Bbolt, error) {
 	tape, err := bbolt.NewBboltStorage("session", filepath.Join(s.root, name+".db"))
 	if err != nil {
@@ -181,7 +183,7 @@ func (s *scenario) reopenLocalTape() error {
 }
 
 func (s *scenario) ask(question, answer string) error {
-	a, err := agent.New("borrower-local", s.localTape, agent.WithRunner(modelFunc(func(_ context.Context, req runner.Request) (runner.Response, error) {
+	a, err := agent.New("borrower-local", s.localTape, agent.WithLLM(modelFunc(func(_ context.Context, req runner.Request) (runner.Response, error) {
 		s.lastRequest = req
 		return runner.Response{Output: answer}, nil
 	})))
@@ -196,7 +198,7 @@ func (s *scenario) otherMember() error {
 	if err := s.localTape.Init(owner.WithOwnerId(s.ctx, "other-local")); err != nil {
 		return err
 	}
-	a, err := agent.New("other-local", s.localTape, agent.WithRunner(modelFunc(func(_ context.Context, req runner.Request) (runner.Response, error) {
+	a, err := agent.New("other-local", s.localTape, agent.WithLLM(modelFunc(func(_ context.Context, req runner.Request) (runner.Response, error) {
 		if len(req.Messages) != 1 || req.Messages[0].Text != "private question" {
 			return runner.Response{}, fmt.Errorf("another member received private history: %+v", req.Messages)
 		}
@@ -277,7 +279,7 @@ func (s *scenario) startPeer() error {
 	if err != nil {
 		return err
 	}
-	lender, err := agent.New("researcher-local", s.peerTape, agent.WithRunner(modelFunc(func(context.Context, runner.Request) (runner.Response, error) {
+	lender, err := agent.New("researcher-local", s.peerTape, agent.WithLLM(modelFunc(func(context.Context, runner.Request) (runner.Response, error) {
 		return runner.Response{Output: "research response"}, nil
 	})))
 	if err != nil {
@@ -297,7 +299,7 @@ func (s *scenario) startPeer() error {
 	if err := a2a.Advertise(card, base+a2a.ViewPath); err != nil {
 		return err
 	}
-	handler, err := a2a.NewPeerHandler(card, a2asrv.NewHandler(executor), s.service, authenticate)
+	handler, err := a2a.NewPeerHandler(card, a2asrv.NewHandler(executor), s.service, a2a.TrustedPeerIdentity)
 	if err != nil {
 		return err
 	}
@@ -340,28 +342,10 @@ func (s *scenario) restartPeer() error {
 	return s.startPeer()
 }
 
-type credentials struct {
-	next http.RoundTripper
-	peer string
-}
-
-func (c credentials) RoundTrip(req *http.Request) (*http.Response, error) {
-	clone := req.Clone(req.Context())
-	clone.Header.Set("Authorization", "Bearer "+c.peer+"-token")
-	return c.next.RoundTrip(clone)
-}
-func authenticate(req *http.Request) (string, error) {
-	switch req.Header.Get("Authorization") {
-	case "Bearer borrower-token":
-		return "borrower", nil
-	case "Bearer intruder-token":
-		return "intruder", nil
-	default:
-		return "", errors.New("invalid credential")
-	}
-}
 func (s *scenario) httpClient(peer string) *http.Client {
-	return &http.Client{Transport: credentials{s.server.Client().Transport, peer}, Timeout: 5 * time.Second}
+	client := a2a.TrustedHTTPClient(peer)
+	client.Timeout = 5 * time.Second
+	return client
 }
 func (s *scenario) clientFor(peer string) (*a2a.Client, error) {
 	return a2a.NewClient(s.httpClient(peer), s.card)
@@ -604,7 +588,7 @@ func (s *scenario) borrowWithAgent() error {
 		return err
 	}
 	turns := 0
-	a, err := agent.New("borrower-local", s.localTape, agent.WithTool(a2a.BorrowTool{Client: s.client}), agent.WithRunner(modelFunc(func(_ context.Context, req runner.Request) (runner.Response, error) {
+	a, err := agent.New("borrower-local", s.localTape, agent.WithBorrowClient(s.client), agent.WithLLM(modelFunc(func(_ context.Context, req runner.Request) (runner.Response, error) {
 		turns++
 		if turns == 1 {
 			return runner.Response{ToolCalls: []runner.ToolCall{{ID: "borrow-call", Name: "borrow_peer_context", Arguments: json.RawMessage(`{"requestId":"agent-borrow","purpose":"fix storage concurrency","query":"bbolt"}`)}}}, nil
@@ -659,7 +643,7 @@ func (s *scenario) checkBorrowedContext() error {
 	return errors.New("borrowed context missing from tool results")
 }
 func (s *scenario) recallBorrowedContext() error {
-	a, err := agent.New("borrower-local", s.localTape, agent.WithRunner(modelFunc(func(_ context.Context, req runner.Request) (runner.Response, error) {
+	a, err := agent.New("borrower-local", s.localTape, agent.WithLLM(modelFunc(func(_ context.Context, req runner.Request) (runner.Response, error) {
 		s.lastRequest = req
 		if err := s.checkBorrowedContext(); err != nil {
 			return runner.Response{}, err
@@ -698,10 +682,10 @@ func (s *scenario) checkLocalOwnership() error {
 
 func (s *scenario) wireRequest(problem string) error {
 	body := `{"requestId":"wire-request","purpose":"research","query":"bbolt"}`
-	method, token, extension := "Borrow", "borrower-token", a2a.ExtensionURI
+	method, identity, extension := "Borrow", "borrower", a2a.ExtensionURI
 	switch problem {
-	case "no credentials":
-		token = ""
+	case "no identity":
+		identity = ""
 	case "no extension":
 		extension = ""
 	case "missing purpose":
@@ -721,8 +705,8 @@ func (s *scenario) wireRequest(problem string) error {
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Connect-Protocol-Version", "1")
-	if token != "" {
-		req.Header.Set("Authorization", "Bearer "+token)
+	if identity != "" {
+		req.Header.Set(a2a.PeerIdentityHeader, identity)
 	}
 	if extension != "" {
 		req.Header.Set(a2a.ExtensionHeader, extension)

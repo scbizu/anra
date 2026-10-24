@@ -250,3 +250,13 @@ borrowing RPCs, and Anra tool-result consumption are implemented. Network
 directory registration and a concrete JEV adapter remain future integrations;
 `Ranker` and `Eligible` provide their boundaries. The historical A2A task-store
 adapter has not been restored.
+
+## Trusted-team identity profile
+
+The current trusted-team deployment restricts the registry and agent endpoints
+at the network boundary. It uses the caller-supplied `Anra-Agent` identity in
+place of a global bearer token, trusting members not to impersonate each other.
+References above to an authenticated requester use that established identity
+in this profile. Borrow, read, and release still check the requester-bound grant;
+a view ID alone does not confer access. Credential verification can be supplied
+by a different handler callback in deployments that require it.

@@ -7,3 +7,5 @@ coverage.out
 
 node_modules/
 /reports/
+/.anra/
+/anra
